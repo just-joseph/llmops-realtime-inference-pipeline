@@ -1,13 +1,26 @@
 
-# BentoML service with CORS headers added manually to responses
 import bentoml
+from bentoml.metrics import Counter, Histogram
 from starlette.responses import JSONResponse
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
 import logging
+import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# Define metrics
+GENERATE_REQUESTS = Counter(
+    "generate_requests_total",
+    "Total number of text generation requests",
+)
+
+GENERATION_LATENCY = Histogram(
+    "generation_latency_seconds",
+    "Time taken to generate responses"
+)
 
 @bentoml.service(
     resources={"cpu": "2000m", "memory": "4Gi"},
@@ -28,10 +41,15 @@ class LLMInference:
     
     @bentoml.api
     def generate(self, prompt: str, max_length: int = 50) -> dict:
+        start = time.time()
+        GENERATE_REQUESTS.inc()  # Increment counter
+
         try:
             logger.info(f"Processing: {prompt}")
             
             # Encode input
+            # Convert the input prompt (plus an end-of-sequence token) into a PyTorch tensor of token IDs
+            # that represent the text numerically for the model to process (pointers to the model’s vocabulary table)
             input_ids = self.tokenizer.encode(prompt + self.tokenizer.eos_token, return_tensors="pt")
             
             # Generate
@@ -75,6 +93,9 @@ class LLMInference:
                 "status": "error",
                 "error": str(e)
             }
+        
+        finally:
+            GENERATION_LATENCY.observe(time.time() - start)
     
     @bentoml.api(route="/health", input_spec=None, output_spec=None)
     def health(self, **kwargs) -> dict:
