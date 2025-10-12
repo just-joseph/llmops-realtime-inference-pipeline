@@ -74,7 +74,7 @@ jobs:
         BENTO_SERVICE=$(bentoml list --output json | jq -r '.[0].tag')
         echo "Built BentoML service: $BENTO_SERVICE"
         
-        bentoml containerize $BENTO_SERVICE --platform linux/amd64
+        bentoml containerize $BENTO_SERVICE --platform linux/amd64 --enable-prometheus
         
         IMAGE_TAG=$(echo $GITHUB_SHA | cut -c1-8)
         
