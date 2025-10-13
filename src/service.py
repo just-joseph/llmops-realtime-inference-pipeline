@@ -29,6 +29,8 @@ GENERATION_LATENCY = Histogram(
 class LLMInference:
     def __init__(self):
         logger.info("Loading model...")
+        
+        # Load model and tokenizer from Hugging Face
         self.model_name = "microsoft/DialoGPT-medium"
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.model = AutoModelForCausalLM.from_pretrained(self.model_name)
