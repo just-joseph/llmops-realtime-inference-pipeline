@@ -56,17 +56,25 @@ jobs:
       - name: Build Bento
         run: bentoml build
 
-      - name: Containerize Bento (linux/amd64)
+      - name: Containerize and push image to ECR
         run: |
-          BENTO_TAG=$(bentoml list --output json | python -c "import sys, json; print(json.load(sys.stdin)[0]['tag'])")
-          bentoml containerize "$BENTO_TAG" --platform linux/amd64
-
-      - name: Tag & push image to ECR
-        run: |
+          set -euo pipefail
+          AWS_ACCOUNT_ID="$(echo -n "${AWS_ACCOUNT_ID}" | tr -d '\r\n' | xargs)"
           IMAGE_URI=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${GITHUB_SHA}
-          docker tag llm_inference:latest "$IMAGE_URI"
+
+          BENTO_TAG=$(bentoml list --output json | python -c "import sys, json; print(json.load(sys.stdin)[0]['tag'])")
+          echo "Bento: $BENTO_TAG"
+          echo "Building image: $IMAGE_URI"
+
+          # Build the container image with the exact desired name
+          bentoml containerize "$BENTO_TAG" \
+            --platform linux/amd64 \
+            --image-tag "$IMAGE_URI"
+
+          # Push it
           docker push "$IMAGE_URI"
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+
 
       - name: Update kubeconfig
         run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
