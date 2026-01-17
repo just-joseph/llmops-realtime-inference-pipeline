@@ -1,0 +1,74 @@
+name: Build and Deploy to EKS
+
+on:
+  push:
+    branches: ["main"]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+  K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE }}
+  HELM_RELEASE: ${{ vars.HELM_RELEASE }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install bentoml
+
+      - name: Build Bento
+        run: bentoml build
+
+      - name: Containerize Bento (linux/amd64)
+        run: |
+          BENTO_TAG=$(bentoml list --output json | python -c "import sys, json; print(json.load(sys.stdin)[0]['tag'])")
+          bentoml containerize "$BENTO_TAG" --platform linux/amd64
+
+      - name: Tag & push image to ECR
+        run: |
+          IMAGE_URI=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${GITHUB_SHA}
+          docker tag llm_inference:latest "$IMAGE_URI"
+          docker push "$IMAGE_URI"
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
+
+      - name: Deploy with Helm (free-tier values)
+        run: |
+          helm upgrade --install "$HELM_RELEASE" ./k8s/llm-inference-service \
+            --namespace "$K8S_NAMESPACE" --create-namespace \
+            -f ./k8s/llm-inference-service/values-free-tier.yaml \
+            --set image.repository=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY} \
+            --set image.tag=${GITHUB_SHA}
+
+      - name: Show rollout status
+        run: |
+          kubectl get pods -n "$K8S_NAMESPACE"
+          kubectl rollout status deployment/"$HELM_RELEASE" -n "$K8S_NAMESPACE" --timeout=300s || true
